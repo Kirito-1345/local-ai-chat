@@ -56,16 +56,6 @@ Supported: `jpg`, `jpeg`, `png`, `gif`, `bmp`
 
 WebP is explicitly rejected – LM Studio's vision backend has known issues with the format.
 
----
-
-## Project Structure
-
-```
-.
-├── app.py               # Full application logic
-├── requirements.txt
-└── README.md
-```
 
 ---
 
