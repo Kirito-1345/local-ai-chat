@@ -127,7 +127,7 @@ If this works, your setup is correct.
 
 ```bash
 export HF_HOME="./huggingface-hub"
-export LITERT_MODEL_PATH="./huggingface-hub/hub/models--litert-community--gemma-4-E4B-it-litert-lm/snapshots/abcdefg12345.../gemma-4-E4B-it.litertlm
+export LITERT_MODEL_PATH="./huggingface-hub/hub/models--litert-community--gemma-4-E4B-it-litert-lm/snapshots/abcdefg12345.../gemma-4-E4B-it.litertlm"
 export LITERT_BACKEND="CPU"
 
 uv run uvicorn litert_server:app \
