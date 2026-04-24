@@ -1,7 +1,3 @@
-Here is your **clean, English README.md**, structured like before but updated for **LiteRT-LM + Gradio**, with links and clear setup steps:
-
----
-
 # Local AI Chat – LiteRT-LM + Gradio
 
 Gradio-based chat frontend with multimodal support, communicating with a local LiteRT-LM runtime via an OpenAI-compatible REST API.
@@ -235,6 +231,3 @@ uv run python app.py
 
 [Center For Scalable Data Analytics And AI](https://scads.ai)
 
----
-
-If you want, I can also add a **Troubleshooting section** (very useful for HF auth, missing model file, slow CPU inference, etc.).
