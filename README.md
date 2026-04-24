@@ -75,4 +75,8 @@ Supported formats: `mp3`, `wav`, `m4a`, `ogg`, `flac`, `webm`
 
 ---
 
-## Project Structure
+# made during my intern at:
+
+![ScaDS.AI Logo](https://scads.ai/wp-content/themes/scads2023/assets/images/logo.png)
+
+[Center For Scalable Data Analytics And AI](https://scads.ai)
