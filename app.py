@@ -1,164 +1,208 @@
+import base64
+import os
+from pathlib import Path
+from typing import Any
+
 import gradio as gr
 from openai import OpenAI
-import os
-import base64
-import whisper
 
-DEFAULT_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
-DEFAULT_MODEL = os.getenv("LMSTUDIO_MODEL", "gemma-4-e4b")
+
+# 👉 passt jetzt zu deinem LiteRT-Server
+DEFAULT_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://localhost:8000/v1")
+DEFAULT_MODEL = os.getenv("LOCAL_LLM_MODEL", "gemma-4-E4B-it")
+DEFAULT_API_KEY = os.getenv("LOCAL_LLM_API_KEY", "EMPTY")
 
 client = OpenAI(
     base_url=DEFAULT_BASE_URL,
-    api_key="not-needed"
+    api_key=DEFAULT_API_KEY,
 )
 
-whisper_model = whisper.load_model("base")
 
-SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
+
 MIME_MAP = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".gif": "image/gif",
     ".bmp": "image/bmp",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".webm": "audio/webm",
 }
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
 
 
-def file_to_data_url(file_path):
-    ext = os.path.splitext(file_path)[1].lower()
-    mime = MIME_MAP.get(ext, "image/jpeg")
-    with open(file_path, "rb") as f:
-        image_data = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:{mime};base64,{image_data}"
+def extract_file_path(file_item: Any) -> str:
+    if isinstance(file_item, str):
+        return file_item
+
+    if isinstance(file_item, dict):
+        return (
+            file_item.get("path")
+            or file_item.get("name")
+            or file_item.get("file", {}).get("path")
+            or ""
+        )
+
+    return getattr(file_item, "path", None) or getattr(file_item, "name", "") or ""
 
 
-def build_content(text, files):
-    if not files:
-        return text or ""
+def file_to_data_url(file_path: str) -> str:
+    path = Path(file_path)
+    ext = path.suffix.lower()
 
-    content = []
-    for file_path in files:
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext == ".webp":
-            raise ValueError("WebP-Bilder werden von LM Studio nicht unterstützt. Bitte konvertiere das Bild zu JPG oder PNG.")
-        if ext not in SUPPORTED_FORMATS:
-            raise ValueError(f"Das Format '{ext}' wird nicht unterstützt. Bitte verwende JPG, PNG, GIF oder BMP.")
-        content.append({
+    mime = MIME_MAP.get(ext)
+    if not mime:
+        raise ValueError(f"Unsupported file type: {ext}")
+
+    with path.open("rb") as f:
+        encoded = base64.b64encode(f.read()).decode("utf-8")
+
+    return f"data:{mime};base64,{encoded}"
+
+
+def content_part_from_file(file_path: str) -> dict:
+    ext = Path(file_path).suffix.lower()
+
+    if ext == ".webp":
+        raise ValueError("WebP not supported. Use JPG/PNG/GIF/BMP.")
+
+    if ext in IMAGE_EXTENSIONS:
+        return {
             "type": "image_url",
-            "image_url": {"url": file_to_data_url(file_path)}
-        })
+            "image_url": {"url": file_to_data_url(file_path)},
+        }
+
+    if ext in AUDIO_EXTENSIONS:
+        return {
+            "type": "audio_url",
+            "audio_url": {"url": file_to_data_url(file_path)},
+        }
+
+    raise ValueError(f"Unsupported file type: {ext}")
+
+
+def build_user_content(text: str, files: list[Any]):
+    content = []
+
+    for file_item in files or []:
+        file_path = extract_file_path(file_item)
+
+        if not file_path:
+            continue
+
+        if not os.path.exists(file_path):
+            raise ValueError(f"File not found: {file_path}")
+
+        content.append(content_part_from_file(file_path))
 
     if text:
         content.append({"type": "text", "text": text})
 
+    if not content:
+        return ""
+
+    if len(content) == 1 and content[0]["type"] == "text":
+        return content[0]["text"]
+
     return content
 
 
-def prepare_message(text, files):
-    """Verarbeitet Text, Bilder und Audio — gibt (text, image_files, error) zurück."""
-    image_files = []
-    error = None
+def normalize_history(history):
+    messages = []
 
-    for file_path in files:
-        ext = os.path.splitext(file_path)[1].lower()
-        if ext in AUDIO_EXTENSIONS:
-            try:
-                result = whisper_model.transcribe(file_path)
-                transcribed = result["text"].strip()
-                if transcribed:
-                    text = f"{text} {transcribed}".strip() if text else transcribed
-                else:
-                    error = "⚠️ Keine Sprache erkannt. Bitte erneut versuchen."
-            except Exception as e:
-                error = f"⚠️ Fehler beim Transkribieren: {str(e)}"
-        else:
-            image_files.append(file_path)
+    for msg in history or []:
+        if not isinstance(msg, dict):
+            continue
 
-    return text, image_files, error
+        role = msg.get("role")
+        content = msg.get("content", "")
+
+        if role not in {"user", "assistant", "system"}:
+            continue
+
+        if isinstance(content, str):
+            messages.append({"role": role, "content": content})
+            continue
+
+        if isinstance(content, list):
+            text_parts = [
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+
+            if text_parts:
+                messages.append(
+                    {"role": role, "content": "\n".join(text_parts)}
+                )
+
+    return messages
 
 
 def chat(message, history):
-    messages = []
+    text = (message or {}).get("text", "") or ""
+    files = (message or {}).get("files", []) or []
 
-    for msg in history:
-        if isinstance(msg, dict):
-            role = msg["role"]
-            raw = msg["content"]
-
-            if isinstance(raw, list):
-                content = []
-                for item in raw:
-                    if item.get("type") == "file":
-                        file_path = item.get("file", {}).get("path", "")
-                        if file_path and os.path.exists(file_path):
-                            content.append({
-                                "type": "image_url",
-                                "image_url": {"url": file_to_data_url(file_path)}
-                            })
-                    elif item.get("type") == "text":
-                        content.append({"type": "text", "text": item.get("text", "")})
-                messages.append({"role": role, "content": content})
-            else:
-                messages.append({"role": role, "content": str(raw)})
-
-    text = message.get("text", "") or ""
-    files = message.get("files", []) or []
-
-    text, image_files, error = prepare_message(text, files)
-
-    if error:
-        yield error
-        return
-
-    if not text and not image_files:
-        yield "⚠️ Bitte gib eine Nachricht ein oder lade eine Datei hoch."
+    if not text and not files:
+        yield "⚠️ Please enter a message or upload a file."
         return
 
     try:
-        user_content = build_content(text, image_files)
+        user_content = build_user_content(text, files)
     except ValueError as e:
-        yield f"⚠️ {str(e)}"
+        yield f"⚠️ {e}"
         return
 
+    messages = normalize_history(history)
     messages.append({"role": "user", "content": user_content})
 
     try:
         response = client.chat.completions.create(
             model=DEFAULT_MODEL,
             messages=messages,
-            stream=True
+            stream=True,
         )
 
-        partial_message = ""
+        partial = ""
+
         for chunk in response:
+            if not chunk.choices:
+                continue
+
             delta = chunk.choices[0].delta
-            if delta.content is not None:
-                partial_message += delta.content
-                yield partial_message
+
+            if delta.content:
+                partial += delta.content
+                yield partial
 
     except Exception as e:
-        yield f"Fehler bei der Verbindung zu LM Studio: {str(e)}"
+        yield (
+            "Error connecting to LiteRT-LM server\n\n"
+            f"Endpoint: {DEFAULT_BASE_URL}\n"
+            f"Model: {DEFAULT_MODEL}\n\n"
+            f"{e}"
+        )
 
 
 demo = gr.ChatInterface(
-    chat,
-    title="Lokaler AI Chat",
-    description="Verbunden mit LM Studio via OpenAI-kompatibler API",
+    fn=chat,
+    title="Local AI Chat",
+    description="LiteRT-LM backend (Gemma 4 multimodal: text + image + audio)",
     multimodal=True,
     textbox=gr.MultimodalTextbox(
         file_count="multiple",
         file_types=["image", "audio"],
         sources=["upload", "microphone"],
-        placeholder="Nachricht eingeben, Bild hochladen (kein WebP) oder Mikrofon nutzen...",
+        placeholder="Type a message, upload image/audio, or use mic...",
         show_label=False,
     ),
-    examples=[
-        {"text": "Hallo, wer bist du?", "files": []},
-        {"text": "Erkläre mir Quantenphysik einfach.", "files": []},
-        {"text": "Schreibe ein Python-Skript, das eine Liste sortiert.", "files": []},
-    ],
 )
+
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0")
