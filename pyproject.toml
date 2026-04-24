@@ -10,6 +10,7 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "litert-lm-api-nightly",
+    "huggingface-hub",
 ]
 
 [tool.uv]
