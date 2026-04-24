@@ -2,6 +2,7 @@ import gradio as gr
 from openai import OpenAI
 import os
 import base64
+import whisper
 
 DEFAULT_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
 DEFAULT_MODEL = os.getenv("LMSTUDIO_MODEL", "gemma-4-e4b")
@@ -11,6 +12,8 @@ client = OpenAI(
     api_key="not-needed"
 )
 
+whisper_model = whisper.load_model("base")
+
 SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
 MIME_MAP = {
     ".jpg": "image/jpeg",
@@ -19,6 +22,7 @@ MIME_MAP = {
     ".gif": "image/gif",
     ".bmp": "image/bmp",
 }
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm"}
 
 
 def file_to_data_url(file_path):
@@ -37,7 +41,7 @@ def build_content(text, files):
     for file_path in files:
         ext = os.path.splitext(file_path)[1].lower()
         if ext == ".webp":
-            raise ValueError("WebP-Bilder werden nicht unterstützt. Bitte konvertiere das Bild zu JPG oder PNG.")
+            raise ValueError("WebP-Bilder werden von LM Studio nicht unterstützt. Bitte konvertiere das Bild zu JPG oder PNG.")
         if ext not in SUPPORTED_FORMATS:
             raise ValueError(f"Das Format '{ext}' wird nicht unterstützt. Bitte verwende JPG, PNG, GIF oder BMP.")
         content.append({
@@ -49,6 +53,29 @@ def build_content(text, files):
         content.append({"type": "text", "text": text})
 
     return content
+
+
+def prepare_message(text, files):
+    """Verarbeitet Text, Bilder und Audio — gibt (text, image_files, error) zurück."""
+    image_files = []
+    error = None
+
+    for file_path in files:
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in AUDIO_EXTENSIONS:
+            try:
+                result = whisper_model.transcribe(file_path)
+                transcribed = result["text"].strip()
+                if transcribed:
+                    text = f"{text} {transcribed}".strip() if text else transcribed
+                else:
+                    error = "⚠️ Keine Sprache erkannt. Bitte erneut versuchen."
+            except Exception as e:
+                error = f"⚠️ Fehler beim Transkribieren: {str(e)}"
+        else:
+            image_files.append(file_path)
+
+    return text, image_files, error
 
 
 def chat(message, history):
@@ -78,8 +105,18 @@ def chat(message, history):
     text = message.get("text", "") or ""
     files = message.get("files", []) or []
 
+    text, image_files, error = prepare_message(text, files)
+
+    if error:
+        yield error
+        return
+
+    if not text and not image_files:
+        yield "⚠️ Bitte gib eine Nachricht ein oder lade eine Datei hoch."
+        return
+
     try:
-        user_content = build_content(text, files)
+        user_content = build_content(text, image_files)
     except ValueError as e:
         yield f"⚠️ {str(e)}"
         return
@@ -111,9 +148,9 @@ demo = gr.ChatInterface(
     multimodal=True,
     textbox=gr.MultimodalTextbox(
         file_count="multiple",
-        file_types=["image"],
-        sources=["upload"],
-        placeholder="Nachricht eingeben oder Bild hochladen... (kein WebP!)",
+        file_types=["image", "audio"],
+        sources=["upload", "microphone"],
+        placeholder="Nachricht eingeben, Bild hochladen (kein WebP) oder Mikrofon nutzen...",
         show_label=False,
     ),
     examples=[
